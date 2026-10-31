@@ -1,0 +1,4 @@
+# The supported extraction and rendering interface, not scanner internals.
+goosdoc::Entry
+goosdoc::parse
+goosdoc::render

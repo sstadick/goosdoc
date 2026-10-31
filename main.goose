@@ -1,0 +1,121 @@
+import std;
+import os;
+import .goosdoc;
+
+fn read(path: const u8[:]) -> u8[>..] {
+    var data: u8[>..] = [];
+    if !read_file(path, data) {
+        write_stderr(path); write_stderr(": ");
+        goosdoc::fail("cannot read file");
+    }
+    return data;
+}
+
+fn main() {
+    let args = ::args();
+    var title:       const u8[:] = "API reference";
+    var output:      const u8[:] = "";
+    var source_url:  const u8[:] = "";
+    var root:        const u8[:] = ".";
+    var symbol_file: const u8[:] = "";
+    var check = false;
+    var require_docs = false;
+    var files: const u8[:][>..] = [];
+    var i = 1;
+    var positional = false;
+    while i < args.len {
+        let arg = args[i];
+        if positional { files.push(arg); }
+        else if arg == "--" { positional = true; }
+        else if arg == "--check" { check = true; }
+        else if arg == "--require-docs" { require_docs = true; }
+        else if arg == "--help" {
+            print("Usage: goosdoc [options] FILE.goose...\n",
+                  "  --output FILE       Write Markdown (default: stdout)\n",
+                  "  --check             Fail if output is missing or stale; never write\n",
+                  "  --title TEXT        Document title (default: API reference)\n",
+                  "  --root DIR          Read source paths relative to DIR (default: .)\n",
+                  "  --symbols FILE      Qualified names, one per line; select all overloads\n",
+                  "  --require-docs      Fail if a selected declaration has no comment\n",
+                  "  --source-url URL    Source URL prefix, e.g. https://github.com/owner/repo/blob/SHA\n",
+                  "  --                  Treat remaining arguments as file paths");
+            return;
+        } else if arg == "--output" || arg == "--title" || arg == "--root" ||
+                      arg == "--symbols" || arg == "--source-url" {
+            i += 1;
+            if i == args.len { goosdoc::fail("option needs a value"); }
+            if arg == "--output" { output = args[i]; }
+            else if arg == "--title" { title = args[i]; }
+            else if arg == "--root" { root = args[i]; }
+            else if arg == "--symbols" { symbol_file = args[i]; }
+            else { source_url = args[i]; }
+        } else if starts_with(arg, "-") { goosdoc::fail("unknown option; see --help"); }
+        else { files.push(arg); }
+        i += 1;
+    }
+    if files.len == 0 { goosdoc::fail("provide at least one source file; see --help"); }
+    if check && output.len == 0 { goosdoc::fail("--check requires --output"); }
+    while ends_with(source_url, "/") { source_url = source_url[..source_url.len - 1]; }
+    var names: u8[][>..] = [];
+    if symbol_file.len > 0 {
+        let data = read(symbol_file);
+        for line in split(data, '\n') {
+            let name = trim(line);
+            if name.len == 0 || starts_with(name, "#") { continue; }
+            for previous in names { if previous == name { goosdoc::fail("duplicate symbol in selection"); } }
+            var owned: u8[>..] = []; owned.append(name); names.push(copy(owned));
+        }
+        if names.len == 0 { goosdoc::fail("symbol selection is empty"); }
+    }
+    var found: bool[>..] = [];
+    for name in names { found.push(false); }
+    var body:  u8[>..] = [];
+    var index: u8[>..] = [];
+    var count = 0;
+    for file in files {
+        if starts_with(file, "/") || find(file, "\\") >= 0 {
+            goosdoc::fail("source paths must be relative to --root and use / separators");
+        }
+        for component in split(file, '/') {
+            if component == ".." || component == "." || component.len == 0 {
+                goosdoc::fail("source paths must not contain . or .. components");
+            }
+        }
+        var path: u8[>..] = []; path.append(root); path.push('/'); path.append(file);
+        let source = read(path);
+        let entries = goosdoc::parse(source);
+        for entry in entries {
+            var selected = names.len == 0;
+            for name, n in names {
+                if entry.name == name { selected = true; found[n] = true; }
+            }
+            if !selected { continue; }
+            if require_docs && trim(entry.doc).len == 0 {
+                write_stderr(entry.name); write_stderr(": ");
+                goosdoc::fail("missing documentation comment");
+            }
+            count += 1;
+            index.append("- [`"); index.append(entry.name); index.append("`](#api-");
+            format(index, count); index.append(")\n");
+            goosdoc::render(body, entry, file, source_url, count);
+        }
+    }
+    for name, n in names {
+        if !found[n] {
+            write_stderr(name); write_stderr(": ");
+            goosdoc::fail("selected symbol not found");
+        }
+    }
+    if count == 0 { goosdoc::fail("no declarations selected"); }
+    var markdown: u8[>..] = [];
+    markdown.append("<!-- Generated by goosdoc. Edit source comments, not this file. -->\n\n# ");
+    markdown.append(title); markdown.append("\n\n"); markdown.append(index);
+    markdown.push('\n'); markdown.append(body);
+    while ends_with(markdown, "\n\n") { markdown.pop(); }
+    if check {
+        let previous = read(output);
+        if previous != markdown { goosdoc::fail("API reference is stale; regenerate it"); }
+    } else if output.len > 0 {
+        if !write_file_atomic(output, markdown) { goosdoc::fail("cannot write output"); }
+    } else { write_stdout(markdown); }
+}
