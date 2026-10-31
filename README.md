@@ -1,96 +1,27 @@
 # goosdoc
 
-Generate a Markdown API reference for [Goose](https://github.com/aardappel/goose)
-libraries: names, signatures, documentation comments and source links.
-Generation and example extraction are written in Goose, using its standard
-library. An optional Python 3 runner compiles and executes the examples.
+Turn [Goose](https://github.com/aardappel/goose) source comments into a
+Markdown API reference with names, signatures, examples, and source links.
+Run the examples as tests so readers can trust the code they copy.
 
-**[API reference](API.md)** · [Example input](tests/fixture.goose)
+**[API reference](API.md)** · [Latest release: v0.2.0](https://github.com/sstadick/goosdoc/releases/tag/v0.2.0)
 
-## Releases
+Generating documentation requires Goose. Running examples also requires
+Python 3; native builds need GCC or Clang.
 
-Current version: [v0.2.0](https://github.com/sstadick/goosdoc/releases/tag/v0.2.0).
-Version tags (`vMAJOR.MINOR.PATCH`) publish a source release and an `API.md`
-asset with commit permalinks after tests, executable examples and the
-documentation check pass.
-CI runs on branch pushes and pull requests as well.
+## Generate your first reference
 
-## Use
-
-With Goose on `PATH`, build the executable in this checkout:
+From your library directory, check out goosdoc alongside it:
 
 ```sh
-goose build main.goose -O2 -o goosdoc
-./goosdoc --title "My library API" --output API.md library.goose
+git clone --branch v0.2.0 --depth 1 https://github.com/sstadick/goosdoc.git ../goosdoc
 ```
 
-Or run without a native build:
-
-```sh
-goose run main.goose -- --title "My library API" library.goose
-```
-
-Without `--output`, Markdown goes to stdout. Pass source files in the order
-you want them documented. Imports are not followed, and no package download
-is needed to document a library. Paths are relative to `--root` (default `.`).
-Relative source links assume the Markdown lives at the source root.
-
-For example, from a goosdoc checkout next to goostr:
-
-```sh
-./goosdoc --root ../goostr --title "goostr API" \
-  --output /tmp/goostr-api.md goostr.goose search.goose utf8.goose
-```
-
-This includes internals until you supply a symbol selection.
-
-## Comments and API selection
-
-Use ordinary `//` comments directly above each declaration:
-
-```goose
-// Returns the byte offset of the first match, or -1 if none exists.
-fn find_byte(bytes: const u8[:], byte: u8) -> i64 {
-    // implementation
-}
-```
-
-Consecutive standalone comment lines attach to the declaration immediately
-below them, as in Goose's `--dump-docs`. Blank lines, intervening tokens and
-block comments break attachment. Trailing comments do not attach to the next
-declaration. A group comment documents only the first declaration. Markdown
-in comments is preserved, stripping `//` and one following space per line.
-
-By default, all top-level functions, structs, enums and type aliases in the
-input files are included. Function bodies and nested functions are omitted;
-types retain their fields and variants. Undocumented declarations are marked
-*Undocumented.* rather than silently omitted.
-
-To keep implementation helpers out, use a text file of qualified names:
-
-```text
-# api.txt: supported API only
-goostr::Finder
-goostr::finder
-goostr::find
-goostr::find_byte
-```
-
-```sh
-goosdoc --symbols api.txt --require-docs --output API.md library.goose
-```
-
-Selecting a name includes every overload, with its own signature, comment and
-source location. Unknown or duplicate names are errors. `--require-docs`
-rejects selected declarations without comments; it does not assess the
-quality of the prose. See `--help` for all options.
-
-## Executable examples
-
-Put fenced Goose code in the comment attached to a declaration. Write each
-example as the body of `fn main()` and use assertions to check its result:
+Save this as `sample.goose`:
 
 ````goose
+namespace sample;
+
 // Double a number.
 //
 // ```goose
@@ -99,116 +30,150 @@ example as the body of `fn main()` and use assertions to check its result:
 fn twice(n: i64) -> i64 { n * 2 }
 ````
 
-The same code appears in the generated Markdown and runs in its own program.
-Examples do not share variables. Imports and top-level helpers belong in a
-preamble file; without one the runner supplies only `import std;`.
-For a package named `sample`, `tests/doc_preamble.goose` could contain:
+Generate `API.md`, then link it from your README:
+
+```sh
+goose run ../goosdoc/main.goose -- --title "Sample API" \
+  --output API.md sample.goose
+```
+
+The reference includes the function's signature, description, example, and
+a link to its source. Pass multiple source files in the order you want them
+documented. Imports are not followed. Without `--output`, Markdown goes to stdout.
+
+To build a reusable command instead, run this from the goosdoc checkout:
+
+```sh
+goose build main.goose -O2 -o goosdoc
+./goosdoc --help
+```
+
+## Write comments for readers
+
+Put ordinary `//` comments immediately above a function, struct, enum, or
+type alias. Markdown in the comments is preserved, including lists and code
+blocks. A blank line outside the comments breaks their attachment to the
+declaration. Each overload gets its own comment and reference entry.
+
+Keep a short description first, then show a useful example. Document details
+callers need: return values, ownership, errors, and input restrictions.
+Struct and enum declarations include their fields and variants; globals and
+nested functions are not included.
+
+## Choose what to publish
+
+By default, goosdoc includes every top-level declaration it supports, including
+helpers. To select your public API, create `api.txt` with qualified names:
+
+```text
+sample::twice
+```
+
+Then generate only those entries:
+
+```sh
+goose run ../goosdoc/main.goose -- --symbols api.txt --require-docs \
+  --title "Sample API" --output API.md sample.goose
+```
+
+A name selects all its overloads. Missing or duplicate names are errors.
+`--require-docs` rejects selected declarations without comments. Without it,
+undocumented entries appear as *Undocumented.*
+
+## Executable examples
+
+Write each fenced `goose` example as the body of `fn main()`. Use `assert`
+to check results. The runner executes each example separately, so snippets
+do not share variables.
+
+Put imports, structs, and other top-level helpers in a preamble. For the
+sample above, create `tests/doc_preamble.goose` containing:
 
 ```goose
 import std;
 import sample from "..";
 ```
 
-The runner creates temporary source files directly below `--root` and removes
-them afterward. `from ".."` therefore imports the checkout under test, including
-its package build file and headers. Add any explicit transitive imports Goose
-requires to the preamble. Preamble and symbol-file paths are relative to the
-working directory; input source paths are relative to `--root` (default `.`).
-
-From your library checkout, with goosdoc beside it:
+Run the examples from your library directory:
 
 ```sh
 python3 ../goosdoc/doctest.py --symbols api.txt \
   --preamble tests/doc_preamble.goose --require-examples sample.goose
-# Native builds instead of TinyCC:
-python3 ../goosdoc/doctest.py --symbols api.txt \
-  --preamble tests/doc_preamble.goose --require-examples --cc clang sample.goose
 ```
 
-All `goose` fences run by default. Use `goose ignore` for intentionally
-non-executable illustrations; they remain visible but do not count toward
-`--require-examples`. Backtick and tilde fences of at least three characters
-are accepted, with up to three spaces of indentation. Unknown Goose fence
-options, empty executable fences and unclosed fences are errors. There is no
-hidden-line, expected-failure or output-matching syntax.
+`from ".."` imports your local checkout because temporary example programs
+live directly below the library root. Without a preamble, examples get only
+`import std;`. Include any explicit transitive imports your package needs.
 
-`--require-examples` requires a runnable example for every selected declaration,
-including each overload. It can also be passed to the Markdown generator to
-check coverage without running code. The runner always rejects an empty example
-selection and reports failures as `path:line (symbol)`. Assertions stay enabled
-with `--debug`; compile errors, nonzero exits and timeouts fail the command.
-`--timeout` sets seconds per compiler/run command (default 60). `GOOSE` or
-`--goose` selects the Goose compiler; `--cc gcc` and `--cc clang` select native
-builds at `-O2`.
+- All `goose` fences run. Use `goose ignore` for illustrations that should
+  appear in the reference but not execute.
+- `--require-examples` requires a runnable example for every selected
+  declaration, including each overload. Ignored examples do not count.
+- Backtick and tilde fences are supported. Empty executable fences, unclosed
+  fences, and unknown Goose fence options are errors.
+- Compilation errors, failed assertions, nonzero exits, and timeouts fail
+  the command. Failures identify the source file, line, and symbol.
+- Use `--cc gcc` or `--cc clang` for native execution instead of TinyCC.
+  Assertions stay enabled in all three modes.
+- Set `GOOSE` or pass `--goose` to choose the compiler. `--timeout` sets the
+  limit per compiler/run command in seconds (default 60).
 
-**Run only trusted documentation.** Examples execute with your user permissions,
-working directory and environment; this is not a sandbox. Markdown generation
-and `--examples` extraction alone never execute snippets. To use another runner:
+**Run only trusted documentation.** Examples have your normal user permissions;
+the runner is not a sandbox. Generating Markdown never executes examples.
+
+## Keep documentation current in CI
+
+Commit `API.md` and regenerate it when the source or comments change. Add
+`--require-examples` to the generation command if every entry needs an example.
+In CI, check the committed reference and run the examples:
+
+```sh
+goose run ../goosdoc/main.goose -- --symbols api.txt --require-docs \
+  --require-examples --title "Sample API" --output API.md --check sample.goose
+python3 ../goosdoc/doctest.py --symbols api.txt \
+  --preamble tests/doc_preamble.goose --require-examples sample.goose
+```
+
+`--check` fails if the reference is missing or stale and never rewrites it.
+Pin Goose and goosdoc revisions in CI, and make these checks prerequisites
+for your release. Add native example runs for the compilers you support.
+
+For a release artifact with permanent GitHub source links:
+
+```sh
+goose run ../goosdoc/main.goose -- --symbols api.txt --require-docs \
+  --source-url "https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA" \
+  --output API-release.md sample.goose
+```
+
+Generate it from the checkout matching that SHA and attach it to your release.
+Keep relative links in the committed `API.md` so a new commit alone does not
+make the reference stale.
+
+## Paths and other tools
+
+Source paths are relative to `--root`, which defaults to the current directory.
+Symbol files, preambles, and output paths are relative to the working directory.
+Relative source links assume `API.md` lives at the library root.
+
+For another example runner, extract snippets as JSON lines:
 
 ```sh
 goose run ../goosdoc/main.goose -- --examples --symbols api.txt sample.goose
 ```
 
-This emits one JSON object per line with `path`, qualified `name`, one-based
-source `line` of the first code line, and `code`.
+Each record has `path`, qualified `name`, the one-based first code `line`, and
+`code`. Extraction does not execute snippets.
 
-## CI and releases
+goosdoc preserves written signatures; it does not infer types or typecheck
+your library. Run `goose check` separately. See `--help` for all CLI options.
 
-Commit `API.md` and link it near the top of your README. Regenerate it when
-the API or its comments change. Run the same command with `--check` in CI:
+## Contributing
 
-```sh
-goosdoc --symbols api.txt --require-docs --require-examples \
-  --output API.md --check library.goose
-python3 ../goosdoc/doctest.py --symbols api.txt \
-  --preamble tests/doc_preamble.goose --require-examples library.goose
-```
-
-The command exits with status 1 if the file is missing or stale, and never
-writes in check mode. Generation also leaves an existing file intact if
-extraction or validation fails. Run the reference check and example runner in
-the job your release already depends on. Pin both Goose and goosdoc in CI.
-Add native runs with `--cc gcc` and `--cc clang` if your package supports them.
-
-For release documentation, generate a separate copy with commit permalinks:
+From this checkout, with Goose on `PATH`:
 
 ```sh
-goosdoc --symbols api.txt --require-docs \
-  --source-url "https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA" \
-  --output API-release.md library.goose
-```
-
-Attach `API-release.md` to the release after the documentation check and tests
-pass. The checkout must match that SHA, including source line numbers.
-goosdoc does not run Git or verify that a supplied revision exists. A full
-commit SHA gives immutable links; `main` does not. Do not put the changing
-HEAD SHA into the checked-in reference: that would make it stale on every
-commit, including the commit adding the reference itself.
-
-This repository checks its own generated reference in CI. Library projects
-must add the check to their own release prerequisites; installing goosdoc
-does not modify their workflows.
-
-## Scope
-
-This is a source scanner, not a Goose parser or typechecker. It handles
-multiline signatures, generics, overloads, default expressions, function
-types, explicit namespaces, extern blocks, nested comments and quoted
-literals. It preserves written signatures; it does not infer omitted types.
-Run `goose check` separately. Globals are omitted, field documentation stays
-inside the type declaration, and imports are deliberately not traversed.
-
-`--dump-docs` informed the comment rules and is used as a test oracle, but
-is not a runtime dependency. That dump does not contain signatures or source
-locations, and names alone cannot distinguish overloads.
-
-## Development
-
-Tested with Goose revision `b46099024b9af8a9f54cd76e24953a89c21ccb3a`.
-Tests require Python 3 and GCC or Clang; the tool itself does not.
-
-```sh
-python3 tests/run.py
+python3 tests/run.py --cc gcc
 python3 tests/run.py --cc clang
 goose run main.goose -- --title "goosdoc API" --symbols api.txt \
   --require-docs --require-examples --output API.md goosdoc.goose
@@ -216,7 +181,6 @@ python3 doctest.py --symbols api.txt --preamble tests/doc_preamble.goose \
   --require-examples goosdoc.goose
 ```
 
-Set `GOOSE` to the compiler executable when it is not on `PATH`. The tests
-exercise TinyCC execution and a native build, compare comment attachment
-with the compiler, and cover signatures, links, selection, stale checks,
-example extraction, isolated execution and failure reporting.
+## License
+
+MIT; see [LICENSE](LICENSE).
