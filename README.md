@@ -2,15 +2,17 @@
 
 Generate a Markdown API reference for [Goose](https://github.com/aardappel/goose)
 libraries: names, signatures, documentation comments and source links.
-Written in Goose, with no dependencies beyond its standard library.
+Generation and example extraction are written in Goose, using its standard
+library. An optional Python 3 runner compiles and executes the examples.
 
 **[API reference](API.md)** · [Example input](tests/fixture.goose)
 
 ## Releases
 
-Current version: [v0.1.0](https://github.com/sstadick/goosdoc/releases/tag/v0.1.0).
+Current version: [v0.2.0](https://github.com/sstadick/goosdoc/releases/tag/v0.2.0).
 Version tags (`vMAJOR.MINOR.PATCH`) publish a source release and an `API.md`
-asset with commit permalinks after tests and the documentation check pass.
+asset with commit permalinks after tests, executable examples and the
+documentation check pass.
 CI runs on branch pushes and pull requests as well.
 
 ## Use
@@ -83,19 +85,90 @@ source location. Unknown or duplicate names are errors. `--require-docs`
 rejects selected declarations without comments; it does not assess the
 quality of the prose. See `--help` for all options.
 
+## Executable examples
+
+Put fenced Goose code in the comment attached to a declaration. Write each
+example as the body of `fn main()` and use assertions to check its result:
+
+````goose
+// Double a number.
+//
+// ```goose
+// assert(sample::twice(3) == 6);
+// ```
+fn twice(n: i64) -> i64 { n * 2 }
+````
+
+The same code appears in the generated Markdown and runs in its own program.
+Examples do not share variables. Imports and top-level helpers belong in a
+preamble file; without one the runner supplies only `import std;`.
+For a package named `sample`, `tests/doc_preamble.goose` could contain:
+
+```goose
+import std;
+import sample from "..";
+```
+
+The runner creates temporary source files directly below `--root` and removes
+them afterward. `from ".."` therefore imports the checkout under test, including
+its package build file and headers. Add any explicit transitive imports Goose
+requires to the preamble. Preamble and symbol-file paths are relative to the
+working directory; input source paths are relative to `--root` (default `.`).
+
+From your library checkout, with goosdoc beside it:
+
+```sh
+python3 ../goosdoc/doctest.py --symbols api.txt \
+  --preamble tests/doc_preamble.goose --require-examples sample.goose
+# Native builds instead of TinyCC:
+python3 ../goosdoc/doctest.py --symbols api.txt \
+  --preamble tests/doc_preamble.goose --require-examples --cc clang sample.goose
+```
+
+All `goose` fences run by default. Use `goose ignore` for intentionally
+non-executable illustrations; they remain visible but do not count toward
+`--require-examples`. Backtick and tilde fences of at least three characters
+are accepted, with up to three spaces of indentation. Unknown Goose fence
+options, empty executable fences and unclosed fences are errors. There is no
+hidden-line, expected-failure or output-matching syntax.
+
+`--require-examples` requires a runnable example for every selected declaration,
+including each overload. It can also be passed to the Markdown generator to
+check coverage without running code. The runner always rejects an empty example
+selection and reports failures as `path:line (symbol)`. Assertions stay enabled
+with `--debug`; compile errors, nonzero exits and timeouts fail the command.
+`--timeout` sets seconds per compiler/run command (default 60). `GOOSE` or
+`--goose` selects the Goose compiler; `--cc gcc` and `--cc clang` select native
+builds at `-O2`.
+
+**Run only trusted documentation.** Examples execute with your user permissions,
+working directory and environment; this is not a sandbox. Markdown generation
+and `--examples` extraction alone never execute snippets. To use another runner:
+
+```sh
+goose run ../goosdoc/main.goose -- --examples --symbols api.txt sample.goose
+```
+
+This emits one JSON object per line with `path`, qualified `name`, one-based
+source `line` of the first code line, and `code`.
+
 ## CI and releases
 
 Commit `API.md` and link it near the top of your README. Regenerate it when
 the API or its comments change. Run the same command with `--check` in CI:
 
 ```sh
-goosdoc --symbols api.txt --require-docs --output API.md --check library.goose
+goosdoc --symbols api.txt --require-docs --require-examples \
+  --output API.md --check library.goose
+python3 ../goosdoc/doctest.py --symbols api.txt \
+  --preamble tests/doc_preamble.goose --require-examples library.goose
 ```
 
 The command exits with status 1 if the file is missing or stale, and never
 writes in check mode. Generation also leaves an existing file intact if
-extraction or validation fails. Run this check in the job your release
-already depends on. Pin both Goose and goosdoc in CI.
+extraction or validation fails. Run the reference check and example runner in
+the job your release already depends on. Pin both Goose and goosdoc in CI.
+Add native runs with `--cc gcc` and `--cc clang` if your package supports them.
 
 For release documentation, generate a separate copy with commit permalinks:
 
@@ -138,9 +211,12 @@ Tests require Python 3 and GCC or Clang; the tool itself does not.
 python3 tests/run.py
 python3 tests/run.py --cc clang
 goose run main.goose -- --title "goosdoc API" --symbols api.txt \
-  --require-docs --output API.md goosdoc.goose
+  --require-docs --require-examples --output API.md goosdoc.goose
+python3 doctest.py --symbols api.txt --preamble tests/doc_preamble.goose \
+  --require-examples goosdoc.goose
 ```
 
 Set `GOOSE` to the compiler executable when it is not on `PATH`. The tests
 exercise TinyCC execution and a native build, compare comment attachment
-with the compiler, and cover signatures, links, selection and stale checks.
+with the compiler, and cover signatures, links, selection, stale checks,
+example extraction, isolated execution and failure reporting.

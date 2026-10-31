@@ -31,14 +31,20 @@ jobs:
         run: |
           python3 tests/run.py --cc gcc
           python3 tests/run.py --cc clang
+      - name: Run documentation examples
+        run: |
+          python3 doctest.py --symbols api.txt --preamble tests/doc_preamble.goose --require-examples goosdoc.goose
+          for cc in gcc clang; do
+            python3 doctest.py --symbols api.txt --preamble tests/doc_preamble.goose --require-examples --cc "$cc" goosdoc.goose
+          done
       - name: Check API reference
         run: |
           goose run main.goose -- --title "goosdoc API" --symbols api.txt \
-            --require-docs --output API.md --check goosdoc.goose
+            --require-docs --require-examples --output API.md --check goosdoc.goose
       - name: Generate release reference
         run: |
           goose run main.goose -- --title "goosdoc API" --symbols api.txt \
-            --require-docs --output "$RUNNER_TEMP/API.md" \
+            --require-docs --require-examples --output "$RUNNER_TEMP/API.md" \
             --source-url "https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA" goosdoc.goose
       - uses: actions/upload-artifact@v4
         with:

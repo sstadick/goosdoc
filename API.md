@@ -4,13 +4,14 @@
 
 - [`goosdoc::Entry`](#api-1)
 - [`goosdoc::parse`](#api-2)
-- [`goosdoc::render`](#api-3)
+- [`goosdoc::examples`](#api-3)
+- [`goosdoc::render`](#api-4)
 
 <a id="api-1"></a>
 
 ## `goosdoc::Entry`
 
-[source](goosdoc.goose#L8-L14)
+[source](goosdoc.goose#L19-L26)
 
 ```goose
 struct Entry {
@@ -19,17 +20,28 @@ struct Entry {
     doc:       u8[],
     line:      i64,
     end_line:  i64,
+    doc_line:  i64,
 }
 ```
 
 A documented declaration. Lines are one-based; end_line includes the body.
 Signature and documentation own their text and do not borrow the source.
+doc_line identifies the first attached comment line, or line if absent.
+
+```goose
+let entries = goosdoc::parse("// Add two numbers.\nfn add(a: i64, b: i64) -> i64 { a + b }");
+assert(entries.len == 1);
+for entry in entries {
+    assert(entry.name == "add");
+    assert(entry.doc_line == 1 && entry.line == 2);
+}
+```
 
 <a id="api-2"></a>
 
 ## `goosdoc::parse`
 
-[source](goosdoc.goose#L164-L266)
+[source](goosdoc.goose#L185-L291)
 
 ```goose
 fn parse(source: const u8[:]) -> Entry[>..]
@@ -41,11 +53,45 @@ immediately above a declaration, following Goose's documentation convention.
 Imports are not followed. Malformed delimiters or literals exit with status 1;
 this is a source scanner, not a substitute for `goose check`.
 
+```goose
+let entries = goosdoc::parse("namespace math;\n// Double.\nfn twice(n: i64) -> i64 { n * 2 }");
+assert(entries.len == 1);
+for entry in entries {
+    assert(entry.name == "math::twice");
+    assert(entry.signature == "fn twice(n: i64) -> i64");
+}
+```
+
 <a id="api-3"></a>
+
+## `goosdoc::examples`
+
+[source](goosdoc.goose#L307-L349)
+
+```goose
+fn examples(out: u8[>..]&, entry: const Entry&, path: const u8[:]) -> i64
+```
+
+Append a JSON record per executable Goose fence in entry.doc and return
+the number of examples. Each record contains path, name, line and code.
+Accepts backtick or tilde fences with at least three characters; `goose
+ignore` fences are displayed but not extracted. Unknown Goose fence options
+and unclosed fences are errors. Extraction never executes the examples.
+
+```goose
+let entries = goosdoc::parse("// ```goose\n// assert(2 + 3 == 5);\n// ```\nfn demo() {}");
+var records: u8[>..] = [];
+for entry in entries {
+    assert(goosdoc::examples(records, entry, "demo.goose") == 1);
+}
+assert(find(records, "assert(2 + 3 == 5);") >= 0);
+```
+
+<a id="api-4"></a>
 
 ## `goosdoc::render`
 
-[source](goosdoc.goose#L279-L293)
+[source](goosdoc.goose#L370-L384)
 
 ```goose
 fn render(out: u8[>..]&, entry: const Entry&, path: const u8[:], source_url: const u8[:], id: i64)
@@ -54,3 +100,11 @@ fn render(out: u8[>..]&, entry: const Entry&, path: const u8[:], source_url: con
 Append one Markdown entry with a source line-range link. source_url is a
 repository blob URL ending in a revision, or empty for relative file links.
 id must be unique in the document; it also identifies this entry in the index.
+
+```goose
+let entries = goosdoc::parse("// Say hello.\nfn hello() {}");
+var markdown: u8[>..] = [];
+for entry in entries { goosdoc::render(markdown, entry, "hello.goose", "", 1); }
+assert(find(markdown, "[source](hello.goose#L2-L2)") >= 0);
+assert(find(markdown, "Say hello.") >= 0);
+```

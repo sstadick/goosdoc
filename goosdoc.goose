@@ -2,15 +2,27 @@ namespace goosdoc;
 
 import std;
 import os;
+import json;
 
 // A documented declaration. Lines are one-based; end_line includes the body.
 // Signature and documentation own their text and do not borrow the source.
+// doc_line identifies the first attached comment line, or line if absent.
+//
+// ```goose
+// let entries = goosdoc::parse("// Add two numbers.\nfn add(a: i64, b: i64) -> i64 { a + b }");
+// assert(entries.len == 1);
+// for entry in entries {
+//     assert(entry.name == "add");
+//     assert(entry.doc_line == 1 && entry.line == 2);
+// }
+// ```
 struct Entry {
     name:      u8[],
     signature: u8[],
     doc:       u8[],
     line:      i64,
     end_line:  i64,
+    doc_line:  i64,
 }
 
 struct Token {
@@ -161,6 +173,15 @@ fn modifier(t: const u8[:]) -> bool {
 // immediately above a declaration, following Goose's documentation convention.
 // Imports are not followed. Malformed delimiters or literals exit with status 1;
 // this is a source scanner, not a substitute for `goose check`.
+//
+// ```goose
+// let entries = goosdoc::parse("namespace math;\n// Double.\nfn twice(n: i64) -> i64 { n * 2 }");
+// assert(entries.len == 1);
+// for entry in entries {
+//     assert(entry.name == "math::twice");
+//     assert(entry.signature == "fn twice(n: i64) -> i64");
+// }
+// ```
 fn parse(source: const u8[:]) -> Entry[>..] {
     let tokens = lex(source);
     var entries: Entry[>..] = [];
@@ -246,9 +267,13 @@ fn parse(source: const u8[:]) -> Entry[>..] {
             }
             signature.append(trim(source[tokens[start].start..sig_end]));
             if in_extern { signature.append("\n}"); }
+            let doc = comment(source, tokens[start]);
+            var doc_line = tokens[start].line;
+            for c in doc { if c == '\n' { doc_line -= 1; } }
             entries.push(Entry {
-                name: copy(name), signature: copy(signature), doc: comment(source, tokens[start]),
-                line: tokens[start].line, end_line: tokens[i - 1].end_line,
+                name:     copy(name), signature: copy(signature), doc: copy(doc),
+                line:     tokens[start].line, end_line: tokens[i - 1].end_line,
+                doc_line: doc_line,
             });
         } else {
             // Skip imports and global initializers, including nested functions.
@@ -265,6 +290,64 @@ fn parse(source: const u8[:]) -> Entry[>..] {
     return entries;
 }
 
+// Append a JSON record per executable Goose fence in entry.doc and return
+// the number of examples. Each record contains path, name, line and code.
+// Accepts backtick or tilde fences with at least three characters; `goose
+// ignore` fences are displayed but not extracted. Unknown Goose fence options
+// and unclosed fences are errors. Extraction never executes the examples.
+//
+// ```goose
+// let entries = goosdoc::parse("// ```goose\n// assert(2 + 3 == 5);\n// ```\nfn demo() {}");
+// var records: u8[>..] = [];
+// for entry in entries {
+//     assert(goosdoc::examples(records, entry, "demo.goose") == 1);
+// }
+// assert(find(records, "assert(2 + 3 == 5);") >= 0);
+// ```
+fn examples(out: u8[>..]&, entry: const Entry&, path: const u8[:]) -> i64 {
+    var marker: u8 = 0;
+    var width = 0;
+    var executable = false;
+    var code: u8[>..] = [];
+    var first_line = 0;
+    var count = 0;
+    for raw, offset in split(entry.doc, '\n') {
+        let left = trim_start(raw);
+        let indentation = raw.len - left.len;
+        let line = trim_end(left);
+        var run = 0;
+        if indentation <= 3 && line.len > 0 && (line[0] == '`' || line[0] == '~') {
+            while run < line.len && line[run] == line[0] { run += 1; }
+        }
+        if marker != 0 {
+            if run >= width && line[0] == marker && trim(line[run..]).len == 0 {
+                if executable {
+                    if trim(code).len == 0 { fail("empty Goose example"); }
+                    out.append("{\"path\":"); json::format_string(out, path);
+                    out.append(",\"name\":"); json::format_string(out, entry.name);
+                    out.append(",\"line\":"); format(out, first_line);
+                    out.append(",\"code\":"); json::format_string(out, code);
+                    out.append("}\n");
+                    count += 1;
+                }
+                marker = 0;
+            } else if executable { code.append(raw); code.push('\n'); }
+        } else if run >= 3 {
+            marker = line[0];
+            width = run;
+            let info = trim(line[run..]);
+            executable = info == "goose";
+            if starts_with(info, "goose") && info != "goose" && info != "goose ignore" {
+                fail("unknown Goose fence option; use goose or goose ignore");
+            }
+            code.clear();
+            first_line = entry.doc_line + offset + 1;
+        }
+    }
+    if marker != 0 { fail("unclosed documentation fence"); }
+    return count;
+}
+
 fn url_path(out: u8[>..]&, path: const u8[:]) {
     let hex = "0123456789ABCDEF";
     for c in path {
@@ -276,6 +359,14 @@ fn url_path(out: u8[>..]&, path: const u8[:]) {
 // Append one Markdown entry with a source line-range link. source_url is a
 // repository blob URL ending in a revision, or empty for relative file links.
 // id must be unique in the document; it also identifies this entry in the index.
+//
+// ```goose
+// let entries = goosdoc::parse("// Say hello.\nfn hello() {}");
+// var markdown: u8[>..] = [];
+// for entry in entries { goosdoc::render(markdown, entry, "hello.goose", "", 1); }
+// assert(find(markdown, "[source](hello.goose#L2-L2)") >= 0);
+// assert(find(markdown, "Say hello.") >= 0);
+// ```
 fn render(out: u8[>..]&, entry: const Entry&, path: const u8[:], source_url: const u8[:], id: i64) {
     out.append("<a id=\"api-"); format(out, id); out.append("\"></a>\n\n## `");
     out.append(entry.name); out.append("`\n\n[source](");

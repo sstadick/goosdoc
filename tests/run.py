@@ -1,10 +1,12 @@
 """Exercise the public CLI with TinyCC and a native C compiler."""
 
 import argparse
+import json
 import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -119,6 +121,55 @@ def exercise(command, tmp):
         cli(second.name, "--output", target, ok=False)
         assert target.read_text() == selected
 
+    examples = (ROOT / "tests/examples.goose").read_text()
+    second.write_bytes(examples.replace("\n", "\r\n").encode())
+    records = [json.loads(line) for line in cli("--examples", "--require-examples", second.name).stdout.splitlines()]
+    assert [r["code"] for r in records] == [
+        "let value = sample::twice(3);\nassert(value == 6);\n",
+        "let value = sample::twice(-4);\nassert(value == -8);\n",
+        'let text = "```";\nassert(sample::twice(text) == 6);\n',
+    ]
+    assert [r["line"] for r in records] == [6, 11, 29]
+    assert all(r["name"] == "sample::twice" and r["path"] == second.name for r in records)
+    assert "this is deliberately" in cli(second.name).stdout
+    for bad, error in [
+        (examples.replace("~~~goose", "~~~goose typo"), "unknown Goose fence"),
+        ("// ```goose\n// assert(true);\nfn f() {}\n", "unclosed documentation fence"),
+        ("// ```goose\n// ```\nfn f() {}\n", "empty Goose example"),
+        ("// No code here.\nfn f() {}\n", "missing executable example"),
+        ("//     ```goose\n//     assert(false);\n//     ```\nfn f() {}\n", "missing executable example"),
+    ]:
+        second.write_text(bad)
+        assert error in cli("--examples", "--require-examples", second.name, ok=False).stderr
+
+
+def exercise_runner(tmp, cc):
+    root = tmp / "sample"
+    root.mkdir()
+    source = root / "sample.goose"
+    original = (ROOT / "tests/examples.goose").read_text()
+    source.write_text(original)
+    preamble = root / "preamble.goose"
+    preamble.write_text('import std;\nimport sample from "..";\n')
+    command = [sys.executable, str(ROOT / "doctest.py"), "--goose", GOOSE, "--root", str(root),
+               "--preamble", str(preamble), "--require-examples", "sample.goose"]
+    for extra in [[], ["--cc", cc]]:
+        assert "3/3 documentation examples passed" in run(command + extra).stdout
+    # Wrong output, a compile error, and no examples must not produce green CI.
+    source.write_text(original.replace("assert(value == 6)", "assert(value == 7)"))
+    for extra in [[], ["--cc", cc]]:
+        failure = run(command + extra, ok=False)
+        assert "sample.goose:6 (sample::twice)" in failure.stderr
+        assert "2/3 documentation examples passed" in failure.stdout
+    source.write_text(original.replace("assert(value == 6)", "not_a_function()"))
+    assert "unknown function" in run(command, ok=False).stderr
+    source.write_text("// No examples.\nfn f() {}\n")
+    assert "missing executable example" in run(command, ok=False).stderr
+    assert "no executable examples" in run([part for part in command if part != "--require-examples"], ok=False).stderr
+    source.write_text(original.replace("assert(value == 6);", "while true {}"))
+    assert "exceeded" in run(command + ["--timeout", "3"], ok=False).stderr
+    assert not list(root.glob(".goosdoc-*")), "temporary programs were not cleaned up"
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -130,6 +181,7 @@ def main():
         exe = tmp / "goosdoc"
         run([GOOSE, "build", str(ROOT / "main.goose"), "--cc", args.cc, "-O2", "-o", str(exe)])
         exercise([str(exe)], tmp)
+        exercise_runner(tmp, args.cc)
     print(f"CLI tests passed: TinyCC and {args.cc}")
 
 
